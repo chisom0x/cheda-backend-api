@@ -1,0 +1,480 @@
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Currency {
+  NGN
+  USD
+}
+
+enum ProductType {
+  ebook
+  template
+  /// A single audio or video file, streamed or downloadable
+  media
+  course
+  membership
+  download
+}
+
+enum ProductStatus {
+  draft
+  published
+}
+
+enum ProductCategory {
+  Business
+  Design
+  Education
+  Finance
+  Lifestyle
+  Music
+  Photography
+  Tech
+  Writing
+}
+
+enum OrderStatus {
+  pending
+  paid
+  failed
+  refunded
+}
+
+enum PaymentMethod {
+  card
+  transfer
+  ussd
+}
+
+enum CouponType {
+  percent
+  fixed
+}
+
+enum PayoutStatus {
+  processing
+  paid
+  failed
+}
+
+enum UserRole {
+  user
+  admin
+}
+
+enum OtpPurpose {
+  email_verification
+  password_reset
+}
+
+enum AssetVisibility {
+  public
+  private
+}
+
+enum SubscriptionPlan {
+  pro
+  premium
+}
+
+/// How often a plan is billed.
+enum BillingInterval {
+  monthly
+  quarterly
+  annually
+}
+
+enum SubscriptionStatus {
+  active
+  non_renewing
+  attention
+  completed
+  cancelled
+}
+
+enum StreamStatus {
+  pending
+  processing
+  ready
+  failed
+}
+
+model User {
+  id              String    @id @default(cuid())
+  name            String
+  email           String    @unique
+  passwordHash    String?   @map("password_hash")
+  firebaseUid     String?   @unique @map("firebase_uid")
+  avatarUrl       String?   @map("avatar_url")
+  emailVerifiedAt DateTime? @map("email_verified_at")
+  role            UserRole  @default(user)
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  seller   Seller?
+  sessions Session[]
+  orders   Order[]
+  progress Progress[]
+  assets   Asset[]
+
+  @@map("users")
+}
+
+model Session {
+  id        String    @id @default(cuid())
+  userId    String    @map("user_id")
+  expiresAt DateTime  @map("expires_at")
+  revokedAt DateTime? @map("revoked_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+model Otp {
+  id         String     @id @default(cuid())
+  email      String
+  purpose    OtpPurpose
+  codeHash   String     @map("code_hash")
+  attempts   Int        @default(0)
+  expiresAt  DateTime   @map("expires_at")
+  consumedAt DateTime?  @map("consumed_at")
+  createdAt  DateTime   @default(now()) @map("created_at")
+
+  @@index([email, purpose, createdAt])
+  @@map("otps")
+}
+
+model Seller {
+  id            String   @id @default(cuid())
+  userId        String   @unique @map("user_id")
+  username      String   @unique
+  displayName   String   @map("display_name")
+  headline      String   @default("")
+  bio           String   @default("")
+  location      String   @default("Nigeria")
+  avatar        Json?
+  banner        Json
+  accentColor   String   @default("#141312") @map("accent_color")
+  socials       Json     @default("{}")
+  verified      Boolean  @default(false)
+  notifications Json
+  bankCode      String?  @map("bank_code")
+  bankName      String?  @map("bank_name")
+  accountNumber String?  @map("account_number")
+  /// Set once a bank account is verified; the store is live only while this exists.
+  accountName   String?  @map("account_name")
+  /// The Paystack customer that pays for this seller's plan.
+  paystackCustomerId String? @unique @map("paystack_customer_id")
+  joinedAt      DateTime @default(now()) @map("joined_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  products Product[]
+  orders   Order[]
+  coupons  Coupon[]
+  payouts  Payout[]
+  visits   Visit[]
+
+  subscription         Subscription?
+  subscriptionPayments SubscriptionPayment[]
+
+  @@map("sellers")
+}
+
+model Asset {
+  id              String          @id @default(cuid())
+  ownerId         String          @map("owner_id")
+  visibility      AssetVisibility
+  key             String          @unique
+  name            String
+  size            BigInt
+  mime            String
+  createdAt       DateTime        @default(now()) @map("created_at")
+  /// HLS rendition of a streaming-only video or audio file (uploaded as stream-media): null for other files.
+  /// The original upload is deleted once this is ready, so these can't be downloaded.
+  streamStatus    StreamStatus?   @map("stream_status")
+  streamClaimedAt DateTime?       @map("stream_claimed_at")
+  /// { master: string, variants: string[] } playlists, segment URIs relative to hls/<asset id>/<variant>/
+  streamPlaylists Json?           @map("stream_playlists")
+
+  owner        User          @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  productFiles ProductFile[]
+
+  @@index([ownerId])
+  @@index([streamStatus])
+  @@map("assets")
+}
+
+model Product {
+  id               String          @id @default(cuid())
+  sellerId         String          @map("seller_id")
+  slug             String
+  type             ProductType
+  status           ProductStatus   @default(draft)
+  title            String
+  tagline          String          @default("")
+  description      String          @default("")
+  includes         String[]        @default([])
+  category         ProductCategory
+  currency         Currency        @default(NGN)
+  pricing          Json
+  basePrice        Int             @default(0) @map("base_price")
+  cover            Json
+  videoDurationSec Int?            @map("video_duration_sec")
+  /// The seller lets buyers save the files. Never applies to courses; for audio/video it also decides
+  /// how the file is uploaded (kept as is, or converted for streaming only), so it can't change once attached.
+  downloadable     Boolean         @default(true)
+  /// Viewable only in the Cheda app, which blocks screenshots, screen recording and sharing. Never downloadable.
+  protected        Boolean         @default(false)
+  salesCount       Int             @default(0) @map("sales_count")
+  rating           Float           @default(0)
+  reviewCount      Int             @default(0) @map("review_count")
+  createdAt        DateTime        @default(now()) @map("created_at")
+  updatedAt        DateTime        @updatedAt @map("updated_at")
+
+  seller  Seller        @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  files   ProductFile[]
+  course  Course?
+  reviews Review[]
+  orders  Order[]
+
+  @@unique([sellerId, slug])
+  @@index([status, salesCount])
+  @@index([status, createdAt])
+  @@map("products")
+}
+
+model ProductFile {
+  productId String @map("product_id")
+  assetId   String @map("asset_id")
+  position  Int
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  asset   Asset   @relation(fields: [assetId], references: [id], onDelete: Restrict)
+
+  @@id([productId, assetId])
+  @@map("product_files")
+}
+
+model Course {
+  id        String   @id @default(cuid())
+  productId String   @unique @map("product_id")
+  modules   Json     @default("[]")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@map("courses")
+}
+
+model Review {
+  id         String   @id @default(cuid())
+  productId  String   @map("product_id")
+  authorName String   @map("author_name")
+  rating     Int
+  body       String
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId, createdAt])
+  @@map("reviews")
+}
+
+model Order {
+  id                String        @id @default(cuid())
+  seq               Int           @unique @default(autoincrement())
+  productId         String        @map("product_id")
+  productTitle      String        @map("product_title")
+  sellerId          String        @map("seller_id")
+  buyerUserId       String?       @map("buyer_user_id")
+  buyerEmail        String        @map("buyer_email")
+  buyerName         String        @map("buyer_name")
+  currency          Currency
+  subtotal          Int
+  discount          Int
+  total             Int
+  fee               Int
+  net               Int
+  /// What Bachs charges Cheda to collect `total`; Cheda's profit on the sale is `fee - providerFee`.
+  providerFee       Int           @default(0) @map("provider_fee")
+  couponId          String?       @map("coupon_id")
+  couponCode        String?       @map("coupon_code")
+  paymentMethod     PaymentMethod @map("payment_method")
+  status            OrderStatus   @default(pending)
+  paymentReference  String        @unique @map("payment_reference")
+  /// The Bachs checkout id (chk_…), used to verify the payment.
+  providerReference String?       @map("provider_reference")
+  /// From then on `net` is available in the seller's wallet.
+  paidAt            DateTime?     @map("paid_at")
+  /// The withdrawal that paid this order's `net` out of the seller's wallet.
+  payoutId          String?       @map("payout_id")
+  createdAt         DateTime      @default(now()) @map("created_at")
+  updatedAt         DateTime      @updatedAt @map("updated_at")
+
+  product     Product      @relation(fields: [productId], references: [id], onDelete: Restrict)
+  seller      Seller       @relation(fields: [sellerId], references: [id], onDelete: Restrict)
+  buyer       User?        @relation(fields: [buyerUserId], references: [id], onDelete: SetNull)
+  coupon      Coupon?      @relation(fields: [couponId], references: [id], onDelete: SetNull)
+  payout      Payout?      @relation(fields: [payoutId], references: [id], onDelete: SetNull)
+  accessLinks AccessLink[]
+
+  @@index([status, paidAt])
+  @@index([sellerId, status, paidAt])
+  @@index([sellerId, status, payoutId])
+  @@index([sellerId, createdAt])
+  @@index([buyerEmail, status])
+  @@index([buyerUserId, status])
+  @@map("orders")
+}
+
+model AccessLink {
+  id        String    @id @default(cuid())
+  tokenHash String    @unique @map("token_hash")
+  orderId   String    @map("order_id")
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@map("access_links")
+}
+
+model Coupon {
+  id             String     @id @default(cuid())
+  sellerId       String     @map("seller_id")
+  code           String
+  type           CouponType
+  value          Int
+  productIds     String[]   @default([]) @map("product_ids")
+  maxRedemptions Int?       @map("max_redemptions")
+  redemptions    Int        @default(0)
+  expiresAt      DateTime?  @map("expires_at")
+  active         Boolean    @default(true)
+  createdAt      DateTime   @default(now()) @map("created_at")
+
+  seller Seller  @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  orders Order[]
+
+  @@unique([sellerId, code])
+  @@map("coupons")
+}
+
+/// A withdrawal request from the seller's wallet to their bank, covering the orders linked to it.
+/// Cheda pays it by hand: `processing` until an admin marks it `paid`, or declines it (`failed`),
+/// which returns its orders to the wallet.
+model Payout {
+  id            String       @id @default(cuid())
+  sellerId      String       @map("seller_id")
+  /// Taken from the wallet; the bank receives `amount - fee`.
+  amount        Int
+  fee           Int          @default(0)
+  currency      Currency     @default(NGN)
+  status        PayoutStatus @default(processing)
+  /// Why an admin declined it, shown to the seller.
+  note          String?
+  bankCode      String       @map("bank_code")
+  bankName      String       @map("bank_name")
+  accountNumber String       @map("account_number")
+  accountName   String       @map("account_name")
+  reference     String       @unique
+  requestedAt   DateTime     @default(now()) @map("requested_at")
+  settledAt     DateTime?    @map("settled_at")
+
+  seller Seller  @relation(fields: [sellerId], references: [id], onDelete: Restrict)
+  orders Order[]
+
+  @@index([sellerId, requestedAt])
+  @@index([status, requestedAt])
+  @@map("payouts")
+}
+
+model Progress {
+  id                 String   @id @default(cuid())
+  userId             String   @map("user_id")
+  productId          String   @map("product_id")
+  completedLessonIds String[] @default([]) @map("completed_lesson_ids")
+  lastLessonId       String?  @map("last_lesson_id")
+  lastPage           Int?     @map("last_page")
+  lastPositionSec    Int?     @map("last_position_sec")
+  percent            Int      @default(0)
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, productId])
+  @@map("progress")
+}
+
+/// The seller's current Cheda plan, mirrored from their Paystack subscription.
+model Subscription {
+  sellerId         String             @id @map("seller_id")
+  plan             SubscriptionPlan
+  interval         BillingInterval    @default(quarterly)
+  status           SubscriptionStatus
+  /// When the paid period ends.
+  currentPeriodEnd DateTime?          @map("current_period_end")
+  paystackCode     String?            @unique @map("paystack_code")
+  /// Paystack needs it, with the code, to cancel the subscription.
+  emailToken       String?            @map("email_token")
+  createdAt        DateTime           @default(now()) @map("created_at")
+  updatedAt        DateTime           @updatedAt @map("updated_at")
+
+  seller Seller @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  @@index([status, currentPeriodEnd])
+  @@map("subscriptions")
+}
+
+/// A successful Paystack charge for a plan: the first payment or a renewal.
+model SubscriptionPayment {
+  id        String           @id @default(cuid())
+  sellerId  String           @map("seller_id")
+  plan      SubscriptionPlan
+  interval  BillingInterval
+  amount    Int
+  /// What Paystack charged Cheda for this payment.
+  providerFee Int            @default(0) @map("provider_fee")
+  currency  Currency         @default(NGN)
+  /// Paystack's transaction reference.
+  reference String           @unique
+  paidAt    DateTime         @map("paid_at")
+
+  seller Seller @relation(fields: [sellerId], references: [id], onDelete: Restrict)
+
+  @@index([paidAt])
+  @@index([sellerId, paidAt])
+  @@map("subscription_payments")
+}
+
+/// Payment webhook events already applied, so a redelivery changes nothing.
+model WebhookEvent {
+  id          String   @id
+  provider    String
+  type        String
+  processedAt DateTime @default(now()) @map("processed_at")
+
+  @@map("webhook_events")
+}
+
+model Visit {
+  sellerId String   @map("seller_id")
+  day      DateTime @db.Date
+  count    Int      @default(0)
+
+  seller Seller @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  @@id([sellerId, day])
+  @@map("visits")
+}
