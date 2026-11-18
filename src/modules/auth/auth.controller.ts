@@ -17,6 +17,7 @@ import {
   SignUpDto,
   UpdateAccountDto,
 } from './auth.dto';
+import { AccountDeletionService } from './account-deletion.service';
 import { AuthService } from './auth.service';
 
 const strict = { default: { limit: 10, ttl: 60_000 } };
@@ -24,7 +25,10 @@ const strict = { default: { limit: 10, ttl: 60_000 } };
 @ApiTags('auth')
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly auth: AuthService) {}
+  constructor(
+    private readonly auth: AuthService,
+    private readonly deletion: AccountDeletionService,
+  ) {}
 
   @Throttle(strict)
   @Post('signup')
@@ -104,6 +108,23 @@ export class AuthController {
   @Post('verify-email')
   verifyEmail(@CurrentUser() user: AuthUser, @Body() dto: CodeDto) {
     return this.auth.verifyEmail(user, dto.code);
+  }
+
+  /** Emails a code that confirms deleting the account (any sign-in method, web or mobile). */
+  @Auth('unverified')
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @HttpCode(200)
+  @Post('delete-account/request')
+  requestAccountDeletion(@CurrentUser() user: AuthUser) {
+    return this.deletion.request(user);
+  }
+
+  @Auth('unverified')
+  @Throttle(strict)
+  @HttpCode(200)
+  @Post('delete-account')
+  deleteAccount(@CurrentUser() user: AuthUser, @Body() dto: CodeDto) {
+    return this.deletion.confirm(user, dto.code);
   }
 
   @Throttle(strict)

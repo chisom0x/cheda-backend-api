@@ -14,6 +14,7 @@ const MAX_ATTEMPTS = 5;
 const SUBJECTS: Record<OtpPurpose, string> = {
   email_verification: 'Verify your email',
   password_reset: 'Reset your password',
+  account_deletion: 'Confirm account deletion',
 };
 
 @Injectable()

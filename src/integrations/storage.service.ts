@@ -3,8 +3,10 @@ import {
   CompleteMultipartUploadCommand,
   CreateMultipartUploadCommand,
   DeleteObjectCommand,
+  DeleteObjectsCommand,
   GetObjectCommand,
   HeadObjectCommand,
+  ListObjectsV2Command,
   ListPartsCommand,
   NotFound,
   PutObjectCommand,
@@ -194,10 +196,33 @@ export class StorageService {
     );
   }
 
-  async delete(key: string) {
+  async delete(key: string, visibility: 'public' | 'private' = 'private') {
     await this.s3().send(
-      new DeleteObjectCommand({ Bucket: this.bucket('private'), Key: key }),
+      new DeleteObjectCommand({ Bucket: this.bucket(visibility), Key: key }),
     );
+  }
+
+  /** Deletes every private object under `prefix` (e.g. an asset's HLS renditions). */
+  async deletePrefix(prefix: string) {
+    const Bucket = this.bucket('private');
+    let token: string | undefined;
+    do {
+      const page = await this.s3().send(
+        new ListObjectsV2Command({
+          Bucket,
+          Prefix: `${prefix}/`,
+          ContinuationToken: token,
+        }),
+      );
+      const keys = (page.Contents ?? []).flatMap((o) =>
+        o.Key ? [{ Key: o.Key }] : [],
+      );
+      if (keys.length)
+        await this.s3().send(
+          new DeleteObjectsCommand({ Bucket, Delete: { Objects: keys } }),
+        );
+      token = page.NextContinuationToken;
+    } while (token);
   }
 
   private s3() {
