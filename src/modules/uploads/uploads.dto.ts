@@ -30,3 +30,9 @@ export class UploadDto {
   @Matches(/^[\w.+-]+\/[\w.+-]+$/, { message: 'Unsupported file type.' })
   mime: string;
 }
+
+export class MultipartDto {
+  @IsString()
+  @Length(1, 1024)
+  uploadId: string;
+}

@@ -1,4 +1,4 @@
-import { Body, Controller, Post } from '@nestjs/common';
+import { Body, Controller, Param, Post } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import {
@@ -6,7 +6,7 @@ import {
   type AuthUser,
   CurrentUser,
 } from '../../common/auth/auth.decorator';
-import { UploadDto } from './uploads.dto';
+import { MultipartDto, UploadDto } from './uploads.dto';
 import { UploadsService } from './uploads.service';
 
 @ApiTags('uploads')
@@ -19,5 +19,23 @@ export class UploadsController {
   @Post()
   create(@CurrentUser() user: AuthUser, @Body() dto: UploadDto) {
     return this.uploads.create(user, dto);
+  }
+
+  @Post(':id/complete')
+  complete(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body() dto: MultipartDto,
+  ) {
+    return this.uploads.complete(user, id, dto.uploadId);
+  }
+
+  @Post(':id/abort')
+  abort(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body() dto: MultipartDto,
+  ) {
+    return this.uploads.abort(user, id, dto.uploadId);
   }
 }

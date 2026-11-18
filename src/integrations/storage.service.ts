@@ -1,10 +1,15 @@
 import {
+  AbortMultipartUploadCommand,
+  CompleteMultipartUploadCommand,
+  CreateMultipartUploadCommand,
   DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
+  ListPartsCommand,
   NotFound,
   PutObjectCommand,
   S3Client,
+  UploadPartCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { Injectable, ServiceUnavailableException } from '@nestjs/common';
@@ -16,6 +21,8 @@ import { pipeline } from 'node:stream/promises';
 import type { Env } from '../config/env';
 
 const UPLOAD_TTL_SEC = 15 * 60;
+/** Part URLs are all signed up front, so they must outlive a slow upload of a large file. */
+const PART_TTL_SEC = 12 * 60 * 60;
 const DOWNLOAD_TTL_SEC = 5 * 60;
 export const STREAM_TTL_SEC = 4 * 60 * 60;
 
@@ -56,6 +63,83 @@ export class StorageService {
       expiresIn: UPLOAD_TTL_SEC,
       signableHeaders: new Set(['content-type', 'content-length']),
     });
+  }
+
+  /**
+   * Starts a multipart upload of a private object and signs a URL for each part.
+   * Parts are uploaded in parallel by the browser, which is much faster than one long PUT.
+   */
+  async presignMultipart(key: string, mime: string, partCount: number) {
+    const bucket = this.bucket('private');
+    const { UploadId } = await this.s3().send(
+      new CreateMultipartUploadCommand({
+        Bucket: bucket,
+        Key: key,
+        ContentType: mime,
+      }),
+    );
+    if (!UploadId)
+      throw new ServiceUnavailableException('File storage is unavailable.');
+    const partUrls = await Promise.all(
+      Array.from({ length: partCount }, (_, i) =>
+        getSignedUrl(
+          this.s3(),
+          new UploadPartCommand({
+            Bucket: bucket,
+            Key: key,
+            UploadId,
+            PartNumber: i + 1,
+          }),
+          { expiresIn: PART_TTL_SEC },
+        ),
+      ),
+    );
+    return { uploadId: UploadId, partUrls };
+  }
+
+  /**
+   * Assembles the uploaded parts. ETags are read back from storage rather than from the
+   * browser, so the bucket's CORS rules don't have to expose the ETag header.
+   * Returns the number of parts found, or 0 if the upload is unknown.
+   */
+  async completeMultipart(key: string, uploadId: string) {
+    const bucket = this.bucket('private');
+    const parts: { PartNumber: number; ETag: string }[] = [];
+    let marker: string | undefined;
+    do {
+      const page = await this.s3().send(
+        new ListPartsCommand({
+          Bucket: bucket,
+          Key: key,
+          UploadId: uploadId,
+          PartNumberMarker: marker,
+        }),
+      );
+      for (const p of page.Parts ?? [])
+        if (p.PartNumber && p.ETag)
+          parts.push({ PartNumber: p.PartNumber, ETag: p.ETag });
+      marker = page.IsTruncated ? page.NextPartNumberMarker : undefined;
+    } while (marker);
+    if (!parts.length) return 0;
+    await this.s3().send(
+      new CompleteMultipartUploadCommand({
+        Bucket: bucket,
+        Key: key,
+        UploadId: uploadId,
+        MultipartUpload: { Parts: parts },
+      }),
+    );
+    return parts.length;
+  }
+
+  async abortMultipart(key: string, uploadId: string) {
+    await this.s3().send(
+      new AbortMultipartUploadCommand({
+        Bucket: this.bucket('private'),
+        Key: key,
+        UploadId: uploadId,
+      }),
+    );
   }
 
   presignDownload(key: string, fileName: string, mode: 'download' | 'stream') {
